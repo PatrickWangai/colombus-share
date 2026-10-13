@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Colombus trip</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<style>
+  /* Base (Uber's open design system) greys, as in the app. */
+  :root {
+    --ink: #000000; --muted: #4b4b4b; --line: #e8e8e8; --chip: #f3f3f3; --bg: #ffffff; --live: #05944f;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #ffffff; --muted: #afafaf; --line: #333333; --chip: #1f1f1f; --bg: #000000; --live: #3cc480; color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: Inter, system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  #map { flex: 1; min-height: 45vh; }
+  #nomap { flex: 1; min-height: 20vh; display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center;
+           color: var(--muted); background: var(--chip); }
+  .sheet { padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); border-top-left-radius: 16px; border-top-right-radius: 16px;
+           margin-top: -16px; position: relative; background: var(--bg); box-shadow: 0 -4px 16px rgba(0,0,0,.08); max-width: 640px;
+           width: 100%; align-self: center; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  h1 { font-size: 22px; line-height: 28px; font-weight: 700; margin: 0; }
+  .status { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; padding: 4px 10px; border-radius: 6px;
+            background: var(--chip); color: var(--muted); white-space: nowrap; }
+  .status.live { background: var(--ink); color: var(--bg); }
+  .status.live::before { content: "● "; color: var(--live); }
+  .plate { display: inline-block; font-size: 20px; font-weight: 700; letter-spacing: 1px; border: 2px solid var(--ink); border-radius: 6px;
+           padding: 2px 10px; margin: 16px 0 6px; }
+  p { margin: 4px 0; font-size: 16px; line-height: 24px; }
+  .muted { color: var(--muted); }
+  .eta { font-size: 18px; font-weight: 600; margin-top: 14px; }
+  .note { font-size: 13px; line-height: 18px; color: var(--muted); border-top: 1px solid var(--line); margin-top: 18px; padding-top: 14px; }
+  .matatu { width: 16px; height: 34px; border-radius: 6px; background: #111; border: 2px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,.4); }
+  .matatu::before { content: ""; display: block; margin: 4px 2px 0; height: 6px; border-radius: 2px; background: #9a9a9a; }
+  .stop { width: 18px; height: 18px; border-radius: 50%; border: 5px solid var(--ink); background: var(--bg); }
+  .dest { width: 18px; height: 18px; background: var(--ink); border: 6px solid var(--ink); box-shadow: inset 0 0 0 3px var(--bg); }
+</style>
+</head>
+<body>
+<div id="map" role="img" aria-label="Map of the matatu's trip"></div>
+<main class="sheet">
+  <div class="row">
+    <h1 id="title"></h1>
+    <span id="status" class="status" hidden></span>
+  </div>
+  <div id="details" hidden>
+    <span class="plate" id="plate"></span>
+    <p id="name" class="muted"></p>
+    <p id="trip"></p>
+    <p id="eta" class="eta"></p>
+    <p id="updated" class="muted"></p>
+  </div>
+  <p class="note" id="note"></p>
+</main>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>
+// Filled in by share/build.sh from local settings: the Supabase project and its public (publishable) key.
+const SUPABASE_URL = "https://zfvpyyexqilexadkktoi.supabase.co";
+const SUPABASE_KEY = "sb_publishable_NbYHdunSezQdzbKunANZHg_SYBYED0z";
+const POLL_MS = 5000;
+const TRAFFIC_MPS = 20 / 3.6; // the app's estimate when a matatu's speed isn't known
+
+const params = new URLSearchParams(location.search);
+const token = params.get("t") || "";
+
+// The page speaks the viewer's language: Swahili if their browser prefers it (or ?lang=sw), else English.
+const swahili = params.get("lang") === "sw" || (params.get("lang") !== "en" && (navigator.languages || [navigator.language]).some((l) => /^sw/i.test(l)));
+const T = swahili ? {
+  html: "sw", title: "Safari ya Colombus", loading: "Inapakia safari…",
+  note: "Imeshirikiwa kutoka Colombus, programu ya matatu mubashara ya Nairobi. Matatu inaonekana hapa tu safari ikiendelea. Hakuna jina wala nambari ya simu ya mtu inayoshirikiwa.",
+  incomplete: "Kiungo hiki hakijakamilika", incompleteText: "Omba kiungo tena, kisha ufungue chote.",
+  failed: "Imeshindwa kupakia safari", failedText: "Angalia mtandao wako, kisha upakie ukurasa upya.",
+  invalid: "Kiungo hiki si sahihi", invalidText: "Huenda kimefutwa. Omba kiungo kipya.",
+  forPlace: (p) => ` · ukienda ${p}`, ended: "Safari hii imeisha", endedTag: "Imeisha", liveTag: "Mubashara",
+  waiting: "Inasubiri matatu", waitingText: "Mahali ilipo itaonekana mara mtu aliye ndani akishiriki.",
+  onTheWay: "Iko njiani", eta: (m, s) => `Takriban dakika ${m} kufika ${s}`, at: (s) => `Iko ${s}`,
+  justNow: "Imesasishwa sasa hivi", secondsAgo: (s) => `Imesasishwa sekunde ${s} zilizopita`, minutesAgo: (m) => `Imesasishwa dakika ${m} zilizopita`,
+  reconnecting: "Inaunganisha upya…", noMap: "Kivinjari hiki hakiwezi kuonyesha ramani, lakini taarifa za safari hapa chini zinaendelea kusasishwa.",
+  mapLabel: "Ramani ya safari ya matatu",
+} : {
+  html: "en", title: "Colombus trip", loading: "Loading the trip…",
+  note: "Shared from Colombus, the live matatu app for Nairobi. The matatu shows here only while the trip is on. Nobody's name or phone number is shared.",
+  incomplete: "This link isn't complete", incompleteText: "Ask for the link again, and open all of it.",
+  failed: "Couldn't load the trip", failedText: "Check your connection and reload the page.",
+  invalid: "This link isn't valid", invalidText: "It may have been deleted. Ask for a new link.",
+  forPlace: (p) => ` · for ${p}`, ended: "This trip has ended", endedTag: "Ended", liveTag: "Live",
+  waiting: "Waiting for the matatu", waitingText: "Its position shows as soon as someone on board shares it.",
+  onTheWay: "On the way", eta: (m, s) => `About ${m} min to ${s}`, at: (s) => `At ${s}`,
+  justNow: "Updated just now", secondsAgo: (s) => `Updated ${s} s ago`, minutesAgo: (m) => `Updated ${m} min ago`,
+  reconnecting: "Reconnecting…", noMap: "This browser can't show the map, but the trip details below stay up to date.",
+  mapLabel: "Map of the matatu's trip",
+};
+document.documentElement.lang = T.html;
+document.title = T.title;
+const $ = (id) => document.getElementById(id);
+const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+
+// Distance along the route, as the app measures it: metres from town.
+function metres(a, b) {
+  const r = Math.PI / 180, dLat = (b[0] - a[0]) * r, dLon = (b[1] - a[1]) * r;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * r) * Math.cos(b[0] * r) * Math.sin(dLon / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+function buildRoute(path) {
+  const cum = [0];
+  for (let i = 1; i < path.length; i++) cum.push(cum[i - 1] + metres(path[i - 1], path[i]));
+  const project = (p) => { // nearest point on the line, as progress in metres
+    let best = { d: Infinity, m: 0 };
+    for (let i = 1; i < path.length; i++) {
+      const a = path[i - 1], b = path[i], k = Math.cos(a[0] * Math.PI / 180);
+      const ax = a[1] * k, ay = a[0], bx = b[1] * k, by = b[0], px = p[1] * k, py = p[0];
+      const len = (bx - ax) ** 2 + (by - ay) ** 2;
+      const t = len ? Math.max(0, Math.min(1, ((px - ax) * (bx - ax) + (py - ay) * (by - ay)) / len)) : 0;
+      const q = [ay + t * (by - ay), (ax + t * (bx - ax)) / k];
+      const d = metres(p, q);
+      if (d < best.d) best = { d, m: cum[i - 1] + t * (cum[i] - cum[i - 1]) };
+    }
+    return best.m;
+  };
+  const slice = (from, to) => {
+    const lo = Math.min(from, to), hi = Math.max(from, to);
+    return path.filter((_, i) => cum[i] >= lo && cum[i] <= hi);
+  };
+  return { project, slice };
+}
+const lngLat = (p) => [p[1], p[0]];
+function bearing(a, b) {
+  const r = Math.PI / 180, y = Math.sin((b[1] - a[1]) * r) * Math.cos(b[0] * r);
+  const x = Math.cos(a[0] * r) * Math.sin(b[0] * r) - Math.sin(a[0] * r) * Math.cos(b[0] * r) * Math.cos((b[1] - a[1]) * r);
+  return (Math.atan2(y, x) / r + 360) % 360;
+}
+
+async function lookup() {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/trip_share`, {
+    method: "POST",
+    headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ p_token: token }),
+  });
+  if (!res.ok) throw new Error(`lookup failed: ${res.status}`);
+  return (await res.json())[0] || null;
+}
+
+function show(status, live) {
+  $("status").hidden = false;
+  $("status").textContent = status;
+  $("status").className = "status" + (live ? " live" : "");
+}
+
+function ago(iso) {
+  const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+  if (s < 20) return T.justNow;
+  if (s < 90) return T.secondsAgo(s);
+  return T.minutesAgo(Math.round(s / 60));
+}
+
+// Some older phone browsers can't draw the map; the trip details still work without it.
+function canDrawMap() {
+  try { const c = document.createElement("canvas"); return !!(c.getContext("webgl2") || c.getContext("webgl")); } catch (e) { return false; }
+}
+
+async function main() {
+  $("title").textContent = T.loading;
+  $("note").textContent = T.note;
+  $("map").setAttribute("aria-label", T.mapLabel);
+  if (!canDrawMap()) {
+    const note = Object.assign(document.createElement("div"), { id: "nomap", textContent: T.noMap });
+    $("map").replaceWith(note);
+    window.maplibregl = { Map: class { on() {} fitBounds() {} }, Marker: class { setLngLat() { return this; } addTo() { return this; } setRotation() { return this; } remove() {} },
+                          LngLatBounds: class { extend() { return this; } } };
+  }
+  const map = new maplibregl.Map({
+    container: "map",
+    style: dark ? "https://tiles.openfreemap.org/styles/dark" : "https://tiles.openfreemap.org/styles/positron",
+    center: [36.89, -1.22], zoom: 12, attributionControl: { compact: true }, dragRotate: false, pitchWithRotate: false,
+  });
+  if (!/^[0-9a-f]{32}$/.test(token)) {
+    $("title").textContent = T.incomplete;
+    $("trip").textContent = T.incompleteText;
+    $("details").hidden = false; $("plate").hidden = true;
+    return;
+  }
+  const network = await (await fetch("network.json")).json();
+  let trip;
+  try { trip = await lookup(); } catch (e) { trip = undefined; }
+  if (trip === undefined) { $("title").textContent = T.failed; $("trip").textContent = T.failedText; $("details").hidden = false; $("plate").hidden = true; return; }
+  if (trip === null) { $("title").textContent = T.invalid; $("trip").textContent = T.invalidText; $("details").hidden = false; $("plate").hidden = true; return; }
+
+  const routeDef = network.routes.find((r) => r.id === trip.route_id);
+  const stages = Object.fromEntries(network.stages.map((s) => [s.id, s]));
+  const route = buildRoute(routeDef.path);
+  const pickup = stages[trip.pickup_stage], dest = stages[trip.destination_stage];
+  const pickupAt = [pickup.lat, pickup.lon], destAt = [dest.lat, dest.lon];
+  const destM = route.project(destAt), pickupM = route.project(pickupAt);
+
+  $("plate").textContent = trip.plate;
+  $("name").textContent = trip.matatu_name ? `“${trip.matatu_name}”` : "";
+  $("trip").textContent = `${pickup.name} → ${dest.name}` + (trip.destination_name ? T.forPlace(trip.destination_name) : "");
+  $("details").hidden = false;
+
+  map.on("load", () => {
+    map.addSource("route", { type: "geojson", data: { type: "Feature", geometry: { type: "LineString", coordinates: routeDef.path.map(lngLat) } } });
+    map.addLayer({ id: "route", type: "line", source: "route", paint: { "line-color": dark ? "#5e5e5e" : "#b3b3b3", "line-width": 5 }, layout: { "line-cap": "round", "line-join": "round" } });
+    map.addSource("trip", { type: "geojson", data: { type: "Feature", geometry: { type: "LineString", coordinates: route.slice(pickupM, destM).map(lngLat) } } });
+    map.addLayer({ id: "trip", type: "line", source: "trip", paint: { "line-color": dark ? "#ffffff" : "#000000", "line-width": 6 }, layout: { "line-cap": "round", "line-join": "round" } });
+  });
+  const el = (cls) => Object.assign(document.createElement("div"), { className: cls });
+  new maplibregl.Marker({ element: el("stop") }).setLngLat(lngLat(pickupAt)).addTo(map);
+  new maplibregl.Marker({ element: el("dest") }).setLngLat(lngLat(destAt)).addTo(map);
+  const matatu = new maplibregl.Marker({ element: el("matatu"), rotationAlignment: "map" });
+  let shownAt = null, framed = false;
+
+  // Slide the matatu to its new spot instead of jumping.
+  function glideTo(target) {
+    if (!shownAt) { shownAt = target; matatu.setLngLat(lngLat(target)).addTo(map); return; }
+    const from = shownAt, start = performance.now();
+    if (metres(from, target) > 2) matatu.setRotation(bearing(from, target));
+    const step = (now) => {
+      const t = Math.min(1, (now - start) / 900);
+      shownAt = [from[0] + (target[0] - from[0]) * t, from[1] + (target[1] - from[1]) * t];
+      matatu.setLngLat(lngLat(shownAt));
+      if (t < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  function render(t) {
+    if (t.ended) {
+      $("title").textContent = T.ended;
+      show(T.endedTag, false);
+      $("eta").textContent = ""; $("updated").textContent = "";
+      matatu.remove();
+      if (!framed) { map.fitBounds([lngLat(pickupAt), lngLat(destAt)], { padding: 60, maxZoom: 15, duration: 0 }); framed = true; }
+      return false;
+    }
+    show(T.liveTag, true);
+    if (t.lat == null) {
+      $("title").textContent = T.waiting;
+      $("eta").textContent = "";
+      $("updated").textContent = T.waitingText;
+    } else {
+      const at = [t.lat, t.lon];
+      $("title").textContent = T.onTheWay;
+      const towards = t.direction === "OUTBOUND" ? destM > t.progress_m : destM < t.progress_m;
+      const left = Math.abs(destM - t.progress_m);
+      $("eta").textContent = towards && left > 50 ? T.eta(Math.max(1, Math.round(left / TRAFFIC_MPS / 60)), dest.name) : (left <= 50 ? T.at(dest.name) : "");
+      $("updated").textContent = ago(t.updated_at);
+      glideTo(at);
+      if (!framed) { map.fitBounds([lngLat(pickupAt), lngLat(destAt), lngLat(at)].reduce((b, p) => b.extend(p), new maplibregl.LngLatBounds(lngLat(at), lngLat(at))), { padding: 60, maxZoom: 15, duration: 0 }); framed = true; }
+    }
+    return true;
+  }
+
+  let keepGoing = render(trip);
+  if (!framed) { map.fitBounds([lngLat(pickupAt), lngLat(destAt)], { padding: 60, maxZoom: 15, duration: 0 }); framed = true; }
+  while (keepGoing) {
+    await new Promise((r) => setTimeout(r, POLL_MS));
+    if (document.visibilityState !== "visible") continue;
+    try { const t = await lookup(); if (t) keepGoing = render(t); } catch (e) { $("updated").textContent = T.reconnecting; }
+  }
+}
+main();
+</script>
+</body>
+</html>
