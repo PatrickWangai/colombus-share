@@ -130,7 +130,7 @@ function buildRoute(path) {
     const lo = Math.min(from, to), hi = Math.max(from, to);
     return path.filter((_, i) => cum[i] >= lo && cum[i] <= hi);
   };
-  return { project, slice };
+  return { project, slice, length: cum[cum.length - 1] };
 }
 const lngLat = (p) => [p[1], p[0]];
 function bearing(a, b) {
@@ -174,49 +174,74 @@ async function main() {
   if (!canDrawMap()) {
     const note = Object.assign(document.createElement("div"), { id: "nomap", textContent: T.noMap });
     $("map").replaceWith(note);
-    window.maplibregl = { Map: class { on() {} fitBounds() {} }, Marker: class { setLngLat() { return this; } addTo() { return this; } setRotation() { return this; } remove() {} },
-                          LngLatBounds: class { extend() { return this; } } };
+    // A stand-in that does nothing, so the rest of the page runs the same without a map.
+    window.maplibregl = {
+      Map: class { on(event, f) { if (event === "load") setTimeout(f); } addSource() {} addLayer() {} getSource() { return { setData() {} }; } fitBounds() {} },
+      Marker: class { setLngLat() { return this; } addTo() { return this; } setRotation() { return this; } remove() {} },
+      LngLatBounds: class { extend() { return this; } },
+    };
   }
   const map = new maplibregl.Map({
     container: "map",
     style: dark ? "https://tiles.openfreemap.org/styles/dark" : "https://tiles.openfreemap.org/styles/positron",
     center: [36.89, -1.22], zoom: 12, attributionControl: { compact: true }, dragRotate: false, pitchWithRotate: false,
   });
+  // Listen straight away: the map can finish loading while the trip is still being fetched.
+  const line = (coordinates) => ({ type: "Feature", geometry: { type: "LineString", coordinates } });
+  const mapReady = new Promise((resolve) => map.on("load", () => {
+    map.addSource("route", { type: "geojson", data: line([]) });
+    map.addLayer({ id: "route", type: "line", source: "route", paint: { "line-color": dark ? "#5e5e5e" : "#b3b3b3", "line-width": 5 }, layout: { "line-cap": "round", "line-join": "round" } });
+    map.addSource("trip", { type: "geojson", data: line([]) });
+    map.addLayer({ id: "trip", type: "line", source: "trip", paint: { "line-color": dark ? "#ffffff" : "#000000", "line-width": 6 }, layout: { "line-cap": "round", "line-join": "round" } });
+    resolve();
+  }));
   if (!/^[0-9a-f]{32}$/.test(token)) {
     $("title").textContent = T.incomplete;
     $("trip").textContent = T.incompleteText;
     $("details").hidden = false; $("plate").hidden = true;
     return;
   }
-  const network = await (await fetch("network.json")).json();
+  const stages = await (await fetch("stages.json")).json();
+  const stage = (id) => { const s = stages[id]; return s && { name: s[0], at: [s[1], s[2]] }; };
   let trip;
   try { trip = await lookup(); } catch (e) { trip = undefined; }
   if (trip === undefined) { $("title").textContent = T.failed; $("trip").textContent = T.failedText; $("details").hidden = false; $("plate").hidden = true; return; }
   if (trip === null) { $("title").textContent = T.invalid; $("trip").textContent = T.invalidText; $("details").hidden = false; $("plate").hidden = true; return; }
 
-  const routeDef = network.routes.find((r) => r.id === trip.route_id);
-  const stages = Object.fromEntries(network.stages.map((s) => [s.id, s]));
-  const route = buildRoute(routeDef.path);
-  const pickup = stages[trip.pickup_stage], dest = stages[trip.destination_stage];
-  const pickupAt = [pickup.lat, pickup.lon], destAt = [dest.lat, dest.lon];
-  const destM = route.project(destAt), pickupM = route.project(pickupAt);
-
-  $("plate").textContent = trip.plate;
-  $("name").textContent = trip.matatu_name ? `“${trip.matatu_name}”` : "";
-  $("trip").textContent = `${pickup.name} → ${dest.name}` + (trip.destination_name ? T.forPlace(trip.destination_name) : "");
-  $("details").hidden = false;
-
-  map.on("load", () => {
-    map.addSource("route", { type: "geojson", data: { type: "Feature", geometry: { type: "LineString", coordinates: routeDef.path.map(lngLat) } } });
-    map.addLayer({ id: "route", type: "line", source: "route", paint: { "line-color": dark ? "#5e5e5e" : "#b3b3b3", "line-width": 5 }, layout: { "line-cap": "round", "line-join": "round" } });
-    map.addSource("trip", { type: "geojson", data: { type: "Feature", geometry: { type: "LineString", coordinates: route.slice(pickupM, destM).map(lngLat) } } });
-    map.addLayer({ id: "trip", type: "line", source: "trip", paint: { "line-color": dark ? "#ffffff" : "#000000", "line-width": 6 }, layout: { "line-cap": "round", "line-join": "round" } });
-  });
+  const dest = stage(trip.destination_stage);
+  const destAt = dest.at;
   const el = (cls) => Object.assign(document.createElement("div"), { className: cls });
-  new maplibregl.Marker({ element: el("stop") }).setLngLat(lngLat(pickupAt)).addTo(map);
+  const pickupMarker = new maplibregl.Marker({ element: el("stop") });
   new maplibregl.Marker({ element: el("dest") }).setLngLat(lngLat(destAt)).addTo(map);
   const matatu = new maplibregl.Marker({ element: el("matatu"), rotationAlignment: "map" });
   let shownAt = null, framed = false;
+
+  // The matatu the rider is on now. On a journey that changes matatus this changes too.
+  let leg = null;
+  async function showLeg(t) {
+    const key = `${t.route_id}|${t.pickup_stage}|${t.direction}`;
+    if (leg && leg.key === key) return;
+    const routeDef = await (await fetch(`routes/${encodeURIComponent(t.route_id)}.json`)).json();
+    const route = buildRoute(routeDef.path);
+    const at = (id) => { const i = routeDef.stageIds.indexOf(id); return i < 0 ? null : (routeDef.progress ? routeDef.progress[i] : route.project(stage(id).at)); };
+    const pickup = stage(t.pickup_stage);
+    const pickupM = at(t.pickup_stage) ?? route.project(pickup.at);
+    // The destination may be on a later matatu; then show this one to the end of its line.
+    const destM = at(t.destination_stage);
+    const lengthM = route.length;
+    // Unknown way round (no position yet) and the destination is on a later matatu: just show the route.
+    const endM = destM ?? (t.direction === "INBOUND" ? 0 : t.direction === "OUTBOUND" ? lengthM : null);
+    leg = { key, route, pickupM, destM };
+    pickupMarker.setLngLat(lngLat(pickup.at)).addTo(map);
+    $("trip").textContent = `${pickup.name} → ${dest.name}` + (t.destination_name ? T.forPlace(t.destination_name) : "");
+    await mapReady;
+    map.getSource("route").setData(line(routeDef.path.map(lngLat)));
+    map.getSource("trip").setData(line(endM == null ? [] : route.slice(pickupM, endM).map(lngLat)));
+  }
+
+  $("plate").textContent = trip.plate;
+  $("name").textContent = trip.matatu_name ? `“${trip.matatu_name}”` : "";
+  $("details").hidden = false;
 
   // Slide the matatu to its new spot instead of jumping.
   function glideTo(target) {
@@ -232,13 +257,16 @@ async function main() {
     requestAnimationFrame(step);
   }
 
-  function render(t) {
+  async function render(t) {
+    $("plate").textContent = t.plate;
+    $("name").textContent = t.matatu_name ? `“${t.matatu_name}”` : "";
+    if (!t.ended && t.route_id) await showLeg(t);
     if (t.ended) {
       $("title").textContent = T.ended;
       show(T.endedTag, false);
       $("eta").textContent = ""; $("updated").textContent = "";
       matatu.remove();
-      if (!framed) { map.fitBounds([lngLat(pickupAt), lngLat(destAt)], { padding: 60, maxZoom: 15, duration: 0 }); framed = true; }
+      frame(t);
       return false;
     }
     show(T.liveTag, true);
@@ -249,22 +277,36 @@ async function main() {
     } else {
       const at = [t.lat, t.lon];
       $("title").textContent = T.onTheWay;
-      const towards = t.direction === "OUTBOUND" ? destM > t.progress_m : destM < t.progress_m;
-      const left = Math.abs(destM - t.progress_m);
-      $("eta").textContent = towards && left > 50 ? T.eta(Math.max(1, Math.round(left / TRAFFIC_MPS / 60)), dest.name) : (left <= 50 ? T.at(dest.name) : "");
+      // Time to the destination when it's on this matatu's route; on an earlier leg of a journey, none.
+      const destM = leg && leg.destM;
+      if (destM != null) {
+        const towards = t.direction === "OUTBOUND" ? destM > t.progress_m : destM < t.progress_m;
+        const left = Math.abs(destM - t.progress_m);
+        $("eta").textContent = towards && left > 50 ? T.eta(Math.max(1, Math.round(left / TRAFFIC_MPS / 60)), dest.name) : (left <= 50 ? T.at(dest.name) : "");
+      } else {
+        $("eta").textContent = "";
+      }
       $("updated").textContent = ago(t.updated_at);
       glideTo(at);
-      if (!framed) { map.fitBounds([lngLat(pickupAt), lngLat(destAt), lngLat(at)].reduce((b, p) => b.extend(p), new maplibregl.LngLatBounds(lngLat(at), lngLat(at))), { padding: 60, maxZoom: 15, duration: 0 }); framed = true; }
+      frame(t, at);
     }
     return true;
   }
 
-  let keepGoing = render(trip);
-  if (!framed) { map.fitBounds([lngLat(pickupAt), lngLat(destAt)], { padding: 60, maxZoom: 15, duration: 0 }); framed = true; }
+  // Show the pickup, the destination and the matatu once; after that the viewer moves the map.
+  function frame(t, at) {
+    if (framed) return;
+    const points = [destAt, stage(t.pickup_stage)?.at, at].filter(Boolean).map(lngLat);
+    map.fitBounds(points.reduce((b, p) => b.extend(p), new maplibregl.LngLatBounds(points[0], points[0])), { padding: 60, maxZoom: 15, duration: 0 });
+    framed = true;
+  }
+
+  let keepGoing = await render(trip);
+  frame(trip);
   while (keepGoing) {
     await new Promise((r) => setTimeout(r, POLL_MS));
     if (document.visibilityState !== "visible") continue;
-    try { const t = await lookup(); if (t) keepGoing = render(t); } catch (e) { $("updated").textContent = T.reconnecting; }
+    try { const t = await lookup(); if (t) keepGoing = await render(t); } catch (e) { $("updated").textContent = T.reconnecting; }
   }
 }
 main();
