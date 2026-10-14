@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Colombus for Saccos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<style>
+  /* Base (Uber's open design system) greys, as in the app. */
+  :root { --ink: #000; --muted: #5e5e5e; --line: #e8e8e8; --chip: #f3f3f3; --bg: #fff; --good: #05944f; --bad: #e11900; color-scheme: light; }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #fff; --muted: #afafaf; --line: #333; --chip: #1f1f1f; --bg: #000; --good: #3cc480; --bad: #ff6a5a; color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: Inter, system-ui, sans-serif; font-size: 16px; line-height: 24px; }
+  button, select, input { font: inherit; color: inherit; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 20px; line-height: 28px; margin: 0; flex: 1; min-width: 180px; }
+  header .sacco { color: var(--muted); font-weight: 500; }
+  .link { background: none; border: none; padding: 6px 4px; cursor: pointer; text-decoration: underline; color: var(--ink); }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+  .card { border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+  .signin { max-width: 420px; margin: 8vh auto 0; }
+  .signin h2 { margin: 0 0 8px; font-size: 24px; line-height: 32px; }
+  label { display: block; font-weight: 600; margin: 16px 0 6px; }
+  input[type=text] { width: 100%; padding: 12px 14px; border: 2px solid var(--line); border-radius: 8px; background: var(--bg); letter-spacing: 1px; }
+  input[type=text]:focus { outline: none; border-color: var(--ink); }
+  .check { display: flex; gap: 8px; align-items: center; margin-top: 12px; font-weight: 400; }
+  .primary { width: 100%; margin-top: 18px; padding: 14px; border: none; border-radius: 8px; background: var(--ink); color: var(--bg); font-weight: 600; cursor: pointer; }
+  .primary:disabled { opacity: .5; cursor: default; }
+  .error { color: var(--bad); margin-top: 10px; min-height: 24px; }
+  .muted { color: var(--muted); }
+  .small { font-size: 14px; line-height: 20px; }
+  nav { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  nav button { border: none; background: var(--chip); padding: 8px 16px; border-radius: 999px; cursor: pointer; font-weight: 500; }
+  nav button[aria-selected=true] { background: var(--ink); color: var(--bg); }
+  .live { display: grid; grid-template-columns: 3fr 2fr; gap: 16px; }
+  #map { height: 520px; border-radius: 12px; overflow: hidden; }
+  @media (max-width: 760px) { .live { grid-template-columns: 1fr; } #map { height: 45vh; } }
+  .list { display: flex; flex-direction: column; }
+  .row { display: flex; gap: 12px; padding: 12px 4px; border-bottom: 1px solid var(--line); cursor: pointer; align-items: flex-start; }
+  .row:hover { background: var(--chip); }
+  .plate { font-weight: 700; letter-spacing: .5px; border: 2px solid var(--ink); border-radius: 6px; padding: 0 6px; display: inline-block; }
+  .chip { display: inline-block; background: var(--ink); color: var(--bg); border-radius: 4px; padding: 0 6px; font-size: 13px; font-weight: 600; }
+  .status { margin-left: auto; text-align: right; white-space: nowrap; font-size: 14px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  @media (max-width: 760px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .stat { background: var(--chip); border-radius: 12px; padding: 14px; }
+  .stat b { display: block; font-size: 28px; line-height: 36px; }
+  .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+  select { padding: 8px 12px; border: 2px solid var(--line); border-radius: 8px; background: var(--bg); }
+  .secondary { padding: 8px 14px; border: none; border-radius: 8px; background: var(--chip); cursor: pointer; font-weight: 500; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 10px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { font-weight: 600; color: var(--muted); font-size: 14px; }
+  .bars { display: flex; align-items: flex-end; gap: 3px; height: 120px; margin: 8px 0 4px; }
+  .bars div { flex: 1; background: var(--ink); border-radius: 3px 3px 0 0; min-height: 2px; }
+  .axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+  h3 { margin: 24px 0 8px; font-size: 18px; }
+  .marker { background: var(--ink); color: var(--bg); font-weight: 700; font-size: 12px; padding: 2px 6px; border-radius: 6px; border: 2px solid var(--bg); box-shadow: 0 2px 6px rgba(0,0,0,.3); white-space: nowrap; }
+  .marker.full { background: #a6a6a6; color: #000; }
+  .note { font-size: 14px; line-height: 20px; color: var(--muted); margin-top: 16px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="brand">Colombus for Saccos <span class="sacco" id="saccoName"></span></h1>
+  <button class="link" id="language"></button>
+  <button class="link" id="signOut" hidden></button>
+</header>
+
+<main>
+  <section id="signin" class="card signin">
+    <h2 id="signinTitle"></h2>
+    <p class="muted" id="signinText"></p>
+    <form id="signinForm">
+      <label for="key" id="keyLabel"></label>
+      <input type="text" id="key" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD-EFGH-JKLM-NPQR-STUV">
+      <label class="check"><input type="checkbox" id="remember" checked> <span id="rememberLabel"></span></label>
+      <button class="primary" id="signinButton" type="submit"></button>
+      <div class="error" id="signinError" role="alert"></div>
+    </form>
+  </section>
+
+  <section id="app" hidden>
+    <nav role="tablist">
+      <button role="tab" data-tab="live" aria-selected="true"></button>
+      <button role="tab" data-tab="matatus" aria-selected="false"></button>
+      <button role="tab" data-tab="demand" aria-selected="false"></button>
+    </nav>
+
+    <div data-panel="live">
+      <p id="liveSummary" class="muted"></p>
+      <div class="live">
+        <div id="map"></div>
+        <div class="list" id="liveList"></div>
+      </div>
+    </div>
+
+    <div data-panel="matatus" hidden>
+      <div class="toolbar">
+        <select id="period" aria-label="Period"></select>
+        <button class="secondary" id="download"></button>
+      </div>
+      <div class="stats" id="stats"></div>
+      <h3 id="tripsByDay"></h3>
+      <div class="bars" id="dayBars"></div>
+      <div class="axis" id="dayAxis"></div>
+      <h3 id="byMatatu"></h3>
+      <div class="table-wrap"><table id="matatuTable"></table></div>
+      <p class="note" id="reportNote"></p>
+    </div>
+
+    <div data-panel="demand" hidden>
+      <div class="toolbar"><select id="demandPeriod" aria-label="Period"></select></div>
+      <p class="muted" id="demandIntro"></p>
+      <h3 id="busiestHours"></h3>
+      <div class="bars" id="hourBars"></div>
+      <div class="axis"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>
+      <h3 id="whereWaiting"></h3>
+      <div class="table-wrap"><table id="demandTable"></table></div>
+      <p class="note" id="demandNote"></p>
+    </div>
+  </section>
+</main>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>
+// Filled in by share/build.sh from local settings: the Supabase project and its public (publishable) key.
+const SUPABASE_URL = "https://zfvpyyexqilexadkktoi.supabase.co";
+const SUPABASE_KEY = "sb_publishable_NbYHdunSezQdzbKunANZHg_SYBYED0z";
+const LIVE_REFRESH_MS = 10000;
+const STALE_MS = 2 * 60 * 1000;
+
+const storage = (() => { try { return window.localStorage; } catch (e) { return null; } })();
+const session = (() => { try { return window.sessionStorage; } catch (e) { return null; } })();
+const read = (store, k) => { try { return store && store.getItem(k); } catch (e) { return null; } };
+const write = (store, k, v) => { try { if (store) v == null ? store.removeItem(k) : store.setItem(k, v); } catch (e) {} };
+
+const params = new URLSearchParams(location.search);
+let lang = params.get("lang") || read(storage, "colombus.lang") ||
+  ((navigator.languages || [navigator.language]).some((l) => /^sw/i.test(l)) ? "sw" : "en");
+
+const WORDS = {
+  en: {
+    brand: "Colombus for Saccos", other: "Kiswahili", signOut: "Sign out",
+    signinTitle: "Sacco dashboard", signinText: "See where your matatus are, how much they work and where riders wait.",
+    keyLabel: "Manager key", remember: "Keep me signed in on this computer", signIn: "Sign in", signingIn: "Signing in…",
+    badKey: "That key isn't recognised. Check it, or ask Colombus for a new one.", offline: "Couldn't reach Colombus. Check your connection.",
+    tabLive: "Live", tabMatatus: "Matatus", tabDemand: "Riders waiting",
+    onRoad: (n, total) => `${n} of ${total} matatus on the road now`,
+    noMatatus: "No matatus yet. They appear here once a conductor starts a shift with your Sacco code.",
+    seats: "Seats free", full: "Full", notOnRoad: "Not on the road", sinceShift: (t) => `On shift since ${t}`,
+    updated: (m) => m < 1 ? "Updated just now" : `Updated ${m} min ago`,
+    today: "Today", days7: "Last 7 days", days30: "Last 30 days", download: "Download (CSV)",
+    statTrips: "Trips", statKm: "Kilometres", statHours: "Hours on shift", statRiders: "Colombus riders",
+    tripsByDay: "Trips each day", byMatatu: "By matatu",
+    cols: ["Matatu", "Days out", "Hours", "Km", "Trips", "Riders"],
+    reportNote: "From the conductor's phone during shifts. A trip is a run covering most of a route. Riders are people using Colombus on board, not every passenger. Location reports are kept for 30 days.",
+    demandIntro: "Riders who told Colombus they were waiting, along the routes your matatus ran.",
+    busiestHours: "Busiest hours", whereWaiting: "Where riders wait", demandCols: ["Stage", "Route", "Riders", "Busiest hour"],
+    demandNote: "Counts only: Colombus never shows who is waiting.", noDemand: "No riders have waited along your routes in this period yet.",
+  },
+  sw: {
+    brand: "Colombus kwa Sacco", other: "English", signOut: "Toka",
+    signinTitle: "Dashibodi ya Sacco", signinText: "Ona matatu zako ziko wapi, zinafanya kazi kiasi gani na abiria wanasubiri wapi.",
+    keyLabel: "Ufunguo wa msimamizi", remember: "Nikumbuke kwenye kompyuta hii", signIn: "Ingia", signingIn: "Inaingia…",
+    badKey: "Ufunguo huo hautambuliki. Uangalie, au uombe Colombus ufunguo mpya.", offline: "Imeshindwa kufikia Colombus. Angalia mtandao wako.",
+    tabLive: "Mubashara", tabMatatus: "Matatu", tabDemand: "Abiria wanaosubiri",
+    onRoad: (n, total) => `Matatu ${n} kati ya ${total} ziko barabarani sasa`,
+    noMatatus: "Bado hakuna matatu. Zitaonekana hapa kondakta akianza zamu kwa nambari ya Sacco yako.",
+    seats: "Viti vipo", full: "Imejaa", notOnRoad: "Haiko barabarani", sinceShift: (t) => `Zamuni tangu ${t}`,
+    updated: (m) => m < 1 ? "Imesasishwa sasa hivi" : `Imesasishwa dakika ${m} zilizopita`,
+    today: "Leo", days7: "Siku 7 zilizopita", days30: "Siku 30 zilizopita", download: "Pakua (CSV)",
+    statTrips: "Safari", statKm: "Kilomita", statHours: "Saa za zamu", statRiders: "Abiria wa Colombus",
+    tripsByDay: "Safari kila siku", byMatatu: "Kwa kila matatu",
+    cols: ["Matatu", "Siku", "Saa", "Km", "Safari", "Abiria"],
+    reportNote: "Kutoka kwa simu ya kondakta wakati wa zamu. Safari ni mzunguko unaofunika sehemu kubwa ya njia. Abiria ni wanaotumia Colombus ndani, si kila abiria. Ripoti za mahali huhifadhiwa siku 30.",
+    demandIntro: "Abiria walioiambia Colombus wanasubiri, kwenye njia ambazo matatu zako zilipita.",
+    busiestHours: "Saa zenye shughuli nyingi", whereWaiting: "Abiria wanasubiri wapi", demandCols: ["Kituo", "Njia", "Abiria", "Saa yenye wengi"],
+    demandNote: "Idadi tu: Colombus haionyeshi kamwe ni nani anasubiri.", noDemand: "Bado hakuna abiria waliosubiri kwenye njia zako katika kipindi hiki.",
+  },
+};
+let T = WORDS[lang] || WORDS.en;
+const $ = (id) => document.getElementById(id);
+const escapeHtml = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+async function rpc(name, body) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${name}`, {
+    method: "POST", headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    const error = new Error(text);
+    error.badKey = /Unknown manager key/.test(text);
+    throw error;
+  }
+  return res.json();
+}
+
+// Keys are shown in groups with dashes; only the letters count.
+const cleanKey = (k) => k.toUpperCase().replace(/[^A-Z0-9]/g, "");
+let key = read(storage, "colombus.key") || read(session, "colombus.key");
+let sacco = null;
+
+function applyWords() {
+  document.documentElement.lang = lang;
+  document.title = T.brand;
+  $("brand").firstChild.textContent = T.brand + " ";
+  $("language").textContent = T.other;
+  $("signOut").textContent = T.signOut;
+  $("signinTitle").textContent = T.signinTitle;
+  $("signinText").textContent = T.signinText;
+  $("keyLabel").textContent = T.keyLabel;
+  $("rememberLabel").textContent = T.remember;
+  $("signinButton").textContent = T.signIn;
+  const tabs = { live: T.tabLive, matatus: T.tabMatatus, demand: T.tabDemand };
+  document.querySelectorAll("nav button").forEach((b) => (b.textContent = tabs[b.dataset.tab]));
+  for (const id of ["period", "demandPeriod"]) {
+    const select = $(id), value = select.value || "7";
+    select.innerHTML = (id === "period" ? [["1", T.today]] : []).concat([["7", T.days7], ["30", T.days30]])
+      .map(([v, t]) => `<option value="${v}">${escapeHtml(t)}</option>`).join("");
+    select.value = [...select.options].some((o) => o.value === value) ? value : "7";
+  }
+  $("download").textContent = T.download;
+  $("tripsByDay").textContent = T.tripsByDay;
+  $("byMatatu").textContent = T.byMatatu;
+  $("reportNote").textContent = T.reportNote;
+  $("demandIntro").textContent = T.demandIntro;
+  $("busiestHours").textContent = T.busiestHours;
+  $("whereWaiting").textContent = T.whereWaiting;
+  $("demandNote").textContent = T.demandNote;
+}
+
+$("language").onclick = () => {
+  lang = lang === "sw" ? "en" : "sw";
+  write(storage, "colombus.lang", lang);
+  T = WORDS[lang];
+  applyWords();
+  if (sacco) { renderLive(); loadReport(); loadDemand(); }
+};
+
+$("signinForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const typed = cleanKey($("key").value);
+  if (!typed) return;
+  $("signinButton").disabled = true;
+  $("signinButton").textContent = T.signingIn;
+  $("signinError").textContent = "";
+  try {
+    await signIn(typed);
+    write($("remember").checked ? storage : session, "colombus.key", typed);
+  } catch (err) {
+    $("signinError").textContent = err.badKey ? T.badKey : T.offline;
+  } finally {
+    $("signinButton").disabled = false;
+    $("signinButton").textContent = T.signIn;
+  }
+};
+
+$("signOut").onclick = () => {
+  write(storage, "colombus.key", null);
+  write(session, "colombus.key", null);
+  location.reload();
+};
+
+async function signIn(k) {
+  const rows = await rpc("sacco_sign_in", { p_key: k });
+  if (!rows.length) { const err = new Error("no sacco"); err.badKey = true; throw err; }
+  key = k;
+  sacco = rows[0];
+  $("saccoName").textContent = "· " + sacco.name;
+  $("signin").hidden = true;
+  $("app").hidden = false;
+  $("signOut").hidden = false;
+  startLive();
+  loadReport();
+  loadDemand();
+}
+
+document.querySelectorAll("nav button").forEach((b) => (b.onclick = () => {
+  document.querySelectorAll("nav button").forEach((x) => x.setAttribute("aria-selected", x === b));
+  document.querySelectorAll("[data-panel]").forEach((p) => (p.hidden = p.dataset.panel !== b.dataset.tab));
+  if (b.dataset.tab === "live" && map) map.resize();
+}));
+
+// Network data published with the page: stage names, and each route's number, labels and path.
+let stages = null;
+const routeCache = {};
+async function stageName(id) {
+  if (!stages) stages = await (await fetch("../stages.json")).json();
+  return stages[id]?.[0] || id;
+}
+async function route(id) {
+  if (!id) return null;
+  if (!routeCache[id]) routeCache[id] = fetch(`../routes/${encodeURIComponent(id)}.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  return routeCache[id];
+}
+const headingOf = (r, direction) => {
+  const label = direction === "INBOUND" ? r.inboundLabel : r.outboundLabel;
+  if (lang !== "sw") return label;
+  return label === "To town" ? "Kuelekea mjini" : label.replace(/^To /, "Kuelekea ");
+};
+
+// ---- Live ----
+let map = null, liveRows = [], markers = {};
+const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+function canDrawMap() {
+  try { const c = document.createElement("canvas"); return !!(c.getContext("webgl2") || c.getContext("webgl")); } catch (e) { return false; }
+}
+
+function startLive() {
+  if (canDrawMap()) {
+    map = new maplibregl.Map({
+      container: "map", style: dark ? "https://tiles.openfreemap.org/styles/dark" : "https://tiles.openfreemap.org/styles/positron",
+      center: [36.85, -1.25], zoom: 11, attributionControl: { compact: true }, dragRotate: false,
+    });
+    map.on("load", () => {
+      map.addSource("routes", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({ id: "routes", type: "line", source: "routes", paint: { "line-color": dark ? "#5e5e5e" : "#b3b3b3", "line-width": 4 } });
+      refreshLive();
+    });
+  } else {
+    $("map").hidden = true;
+  }
+  refreshLive();
+  setInterval(() => { if (document.visibilityState === "visible") refreshLive(); }, LIVE_REFRESH_MS);
+}
+
+let framed = false;
+async function refreshLive() {
+  try { liveRows = await rpc("sacco_live", { p_key: key }); } catch (e) { return; }
+  renderLive();
+  // The routes the matatus are on, drawn faintly under them.
+  const ids = [...new Set(liveRows.map((r) => r.route_id).filter(Boolean))];
+  const routes = (await Promise.all(ids.map(route))).filter(Boolean);
+  if (map && map.getSource("routes")) {
+    map.getSource("routes").setData({ type: "FeatureCollection", features: routes.map((r) => ({ type: "Feature", geometry: { type: "LineString", coordinates: r.path.map((p) => [p[1], p[0]]) } })) });
+  }
+}
+
+function renderLive() {
+  const now = Date.now();
+  const onRoad = liveRows.filter((r) => r.lat != null && now - Date.parse(r.updated_at) < STALE_MS);
+  $("liveSummary").textContent = liveRows.length ? T.onRoad(onRoad.length, liveRows.length) : T.noMatatus;
+  const time = (iso) => new Date(iso).toLocaleTimeString(lang === "sw" ? "sw-KE" : "en-KE", { hour: "2-digit", minute: "2-digit", hour12: false });
+  Promise.all(liveRows.map(async (r) => {
+    const rt = await route(r.route_id);
+    const live = onRoad.includes(r);
+    const heading = rt && r.direction ? `<span class="chip">${escapeHtml(rt.number || "")}</span> ${escapeHtml(headingOf(rt, r.direction))}` : "";
+    const status = live
+      ? `<span class="dot" style="background:${r.is_full ? "#a6a6a6" : "var(--good)"}"></span>${escapeHtml(r.is_full ? T.full : T.seats)}<br><span class="muted">${escapeHtml(T.updated(Math.floor((now - Date.parse(r.updated_at)) / 60000)))}</span>`
+      : `<span class="muted">${escapeHtml(T.notOnRoad)}</span>`;
+    return `<div class="row" data-plate="${escapeHtml(r.plate)}"><div><span class="plate">${escapeHtml(r.plate)}</span>
+      ${r.matatu_name ? `<span class="muted"> “${escapeHtml(r.matatu_name)}”</span>` : ""}<br>
+      <span class="small">${heading}</span>${r.on_shift_since ? `<div class="small muted">${escapeHtml(T.sinceShift(time(r.on_shift_since)))}</div>` : ""}</div>
+      <div class="status">${status}</div></div>`;
+  })).then((html) => {
+    $("liveList").innerHTML = html.join("");
+    $("liveList").querySelectorAll(".row").forEach((row) => (row.onclick = () => {
+      const r = liveRows.find((x) => x.plate === row.dataset.plate);
+      if (map && r && r.lat != null) map.flyTo({ center: [r.lon, r.lat], zoom: 15 });
+    }));
+  });
+  if (!map) return;
+  for (const plate of Object.keys(markers)) {
+    if (!onRoad.some((r) => r.plate === plate)) { markers[plate].remove(); delete markers[plate]; }
+  }
+  for (const r of onRoad) {
+    if (!markers[r.plate]) {
+      const el = Object.assign(document.createElement("div"), { className: "marker", textContent: r.plate });
+      markers[r.plate] = new maplibregl.Marker({ element: el }).setLngLat([r.lon, r.lat]).addTo(map);
+    }
+    markers[r.plate].setLngLat([r.lon, r.lat]);
+    markers[r.plate].getElement().classList.toggle("full", !!r.is_full);
+  }
+  if (!framed && onRoad.length) {
+    const b = onRoad.reduce((acc, r) => acc.extend([r.lon, r.lat]), new maplibregl.LngLatBounds([onRoad[0].lon, onRoad[0].lat], [onRoad[0].lon, onRoad[0].lat]));
+    map.fitBounds(b, { padding: 60, maxZoom: 14, duration: 0 });
+    framed = true;
+  }
+}
+
+// ---- Matatus: what each one did ----
+let reportRows = [];
+$("period").onchange = () => loadReport();
+async function loadReport() {
+  try { reportRows = await rpc("sacco_report", { p_key: key, p_days: Number($("period").value) }); } catch (e) { return; }
+  const sum = (f) => reportRows.reduce((a, r) => a + f(r), 0);
+  const fmt = (n, d = 0) => n.toLocaleString(lang === "sw" ? "sw-KE" : "en-KE", { maximumFractionDigits: d, minimumFractionDigits: d });
+  $("stats").innerHTML = [
+    [T.statTrips, fmt(sum((r) => r.trips))], [T.statKm, fmt(sum((r) => r.km))],
+    [T.statHours, fmt(sum((r) => r.shift_minutes) / 60, 1)], [T.statRiders, fmt(sum((r) => r.riders))],
+  ].map(([label, value]) => `<div class="stat"><b>${escapeHtml(value)}</b><span class="muted small">${escapeHtml(label)}</span></div>`).join("");
+
+  const byDay = {};
+  for (const r of reportRows) byDay[r.day] = (byDay[r.day] || 0) + r.trips;
+  const days = Object.keys(byDay).sort();
+  const top = Math.max(1, ...Object.values(byDay));
+  $("dayBars").innerHTML = days.map((d) => `<div title="${escapeHtml(d)}: ${byDay[d]}" style="height:${(byDay[d] / top) * 100}%"></div>`).join("");
+  $("dayAxis").innerHTML = days.length ? `<span>${escapeHtml(days[0])}</span><span>${escapeHtml(days[days.length - 1])}</span>` : "";
+
+  const byPlate = {};
+  for (const r of reportRows) {
+    const p = (byPlate[r.plate] ||= { plate: r.plate, days: 0, minutes: 0, km: 0, trips: 0, riders: 0 });
+    if (r.shift_minutes > 0 || r.km > 0) p.days++;
+    p.minutes += r.shift_minutes; p.km += r.km; p.trips += r.trips; p.riders += r.riders;
+  }
+  const rows = Object.values(byPlate).sort((a, b) => b.trips - a.trips || b.km - a.km);
+  $("matatuTable").innerHTML = `<tr>${T.cols.map((c) => `<th>${escapeHtml(c)}</th>`).join("")}</tr>` +
+    rows.map((p) => `<tr><td><span class="plate">${escapeHtml(p.plate)}</span></td><td>${p.days}</td><td>${fmt(p.minutes / 60, 1)}</td>
+      <td>${fmt(p.km)}</td><td>${p.trips}</td><td>${p.riders}</td></tr>`).join("");
+}
+
+$("download").onclick = () => {
+  const header = ["matatu", "date", "minutes_on_shift", "km", "trips", "colombus_riders"];
+  const lines = [header.join(",")].concat(reportRows.map((r) => [r.plate, r.day, r.shift_minutes, r.km.toFixed(1), r.trips, r.riders].join(",")));
+  const link = Object.assign(document.createElement("a"), {
+    href: URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" })),
+    download: `${sacco.id}-matatus-${new Date().toISOString().slice(0, 10)}.csv`,
+  });
+  link.click();
+};
+
+// ---- Riders waiting ----
+$("demandPeriod").onchange = () => loadDemand();
+async function loadDemand() {
+  let rows;
+  try { rows = await rpc("sacco_demand", { p_key: key, p_days: Number($("demandPeriod").value) }); } catch (e) { return; }
+  const hours = Array(24).fill(0);
+  const places = {};
+  for (const r of rows) {
+    hours[r.hour_of_day] += r.riders;
+    const k = `${r.route_id}|${r.stage_id}|${r.direction}`;
+    const p = (places[k] ||= { route_id: r.route_id, stage_id: r.stage_id, direction: r.direction, riders: 0, hours: Array(24).fill(0) });
+    p.riders += r.riders;
+    p.hours[r.hour_of_day] += r.riders;
+  }
+  const top = Math.max(1, ...hours);
+  $("hourBars").innerHTML = hours.map((n, h) => `<div title="${String(h).padStart(2, "0")}:00 · ${n}" style="height:${(n / top) * 100}%"></div>`).join("");
+  const list = Object.values(places).sort((a, b) => b.riders - a.riders).slice(0, 25);
+  if (!list.length) { $("demandTable").innerHTML = `<tr><td class="muted">${escapeHtml(T.noDemand)}</td></tr>`; return; }
+  const cells = await Promise.all(list.map(async (p) => {
+    const rt = await route(p.route_id);
+    const busiest = p.hours.indexOf(Math.max(...p.hours));
+    return `<tr><td>${escapeHtml(await stageName(p.stage_id))}</td>
+      <td>${rt ? `<span class="chip">${escapeHtml(rt.number || "")}</span> ${escapeHtml(headingOf(rt, p.direction))}` : escapeHtml(p.route_id)}</td>
+      <td>${p.riders}</td><td>${String(busiest).padStart(2, "0")}:00</td></tr>`;
+  }));
+  $("demandTable").innerHTML = `<tr>${T.demandCols.map((c) => `<th>${escapeHtml(c)}</th>`).join("")}</tr>` + cells.join("");
+}
+
+applyWords();
+if (key) signIn(key).catch(() => { write(storage, "colombus.key", null); write(session, "colombus.key", null); key = null; });
+</script>
+</body>
+</html>
